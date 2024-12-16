@@ -1,0 +1,193 @@
+import pandas as pd
+import numpy as np
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.impute import SimpleImputer
+from sklearn.metrics import r2_score, mean_squared_error
+
+# Step 1: Load Training and Testing Data
+training_file_path = "training_data.csv"  # Replace with the updated file path
+testing_file_path = "testing_data.csv"  # Replace with the updated file path
+
+training_data = pd.read_csv(training_file_path)
+testing_data = pd.read_csv(testing_file_path)
+
+# Drop unnecessary columns in testing data if present
+if 'Unnamed: 28' in testing_data.columns:
+    testing_data.drop(columns=['Unnamed: 28'], inplace=True)
+
+# Define features and target variable
+features = [
+    "nucleotide_composition_A", "nucleotide_composition_U",
+    "nucleotide_composition_G", "nucleotide_composition_C",
+    "gc_content", "minimum_free_energy", "loop_count", "atom_count",
+    "num_electrostatic_contacts", "avg_electrostatic_distance",
+    "num_vdw_contacts", "avg_vdw_distance", "com_distance",
+    "Aromatic Bonds Count", "Atom Count", "Chiral Atom Count"
+]
+target = "Predicted_Binding Affinity (kcal/mol)"
+
+X_train = training_data[features]
+y_train = training_data[target]
+
+X_test = testing_data[features]
+
+# Step 2: Preprocess the data
+imputer = SimpleImputer(strategy='mean')
+scaler = StandardScaler()
+target_scaler = StandardScaler()
+
+# Handle missing values and scale features
+X_train_imputed = imputer.fit_transform(X_train)
+X_test_imputed = imputer.transform(X_test)
+
+X_train_scaled = scaler.fit_transform(X_train_imputed)
+X_test_scaled = scaler.transform(X_test_imputed)
+
+# Scale target
+y_train_scaled = target_scaler.fit_transform(y_train.values.reshape(-1, 1)).ravel()
+
+# Step 3: Initialize Random Forest Regressor
+rf_model = RandomForestRegressor(random_state=42)
+
+# Step 4: Hyperparameter Tuning with Grid Search
+param_grid_rf = {
+    'n_estimators': [100, 200, 500],
+    'max_depth': [5, 10, 20, None],
+    'min_samples_split': [5, 10, 20],
+    'min_samples_leaf': [2, 4, 6],
+    'max_features': ['sqrt', 'log2', None]
+}
+grid_search_rf = GridSearchCV(estimator=rf_model, param_grid=param_grid_rf, cv=5, scoring='r2', n_jobs=-1)
+grid_search_rf.fit(X_train_scaled, y_train_scaled)
+
+# Best model from GridSearch
+best_rf_model = grid_search_rf.best_estimator_
+print(f"Best Parameters (RF): {grid_search_rf.best_params_}")
+
+# Step 5: Predict for Training and Testing Data
+y_train_pred_scaled = best_rf_model.predict(X_train_scaled)
+y_test_pred_scaled = best_rf_model.predict(X_test_scaled)
+
+# Inverse transform predictions and target
+y_train_pred = target_scaler.inverse_transform(y_train_pred_scaled.reshape(-1, 1)).flatten()
+y_train_actual = target_scaler.inverse_transform(y_train_scaled.reshape(-1, 1)).flatten()
+y_test_pred = target_scaler.inverse_transform(y_test_pred_scaled.reshape(-1, 1)).flatten()
+
+# Metrics for training data
+train_r2 = r2_score(y_train_actual, y_train_pred)
+train_mse = mean_squared_error(y_train_actual, y_train_pred)
+
+# Save training results
+training_results_rf = pd.DataFrame({
+    "PDB ID": training_data["PDB ID"],
+    "True Binding Affinity": y_train_actual,
+    "Predicted Binding Affinity": y_train_pred
+})
+training_results_rf.to_csv("Training_Results_RF.csv", index=False)
+
+# Save testing results (predictions only)
+testing_results_rf = pd.DataFrame({
+    "PDB ID": testing_data["PDB ID"],
+    "Predicted Binding Affinity": y_test_pred
+})
+testing_results_rf.to_csv("Testing_Results_RF.csv", index=False)
+################################### Random Forest Regressor Binding Affinity Equation
+import pandas as pd
+import numpy as np
+from sklearn.ensemble import RandomForestRegressor
+
+# Load the training dataset
+training_file_path = "training_data.csv"  # Update with your actual file path
+training_data = pd.read_csv(training_file_path)
+
+# Extract numerical features and target (binding affinity)
+numerical_features = training_data.select_dtypes(include="number").drop(columns=["Binding Affinity (kcal/mol)"])
+target = training_data["Binding Affinity (kcal/mol)"]
+
+# Train a Random Forest Regressor
+rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
+rf_model.fit(numerical_features, target)
+
+# Calculate the intercept (mean binding affinity)
+intercept = target.mean()
+
+# Function to calculate the binding affinity equation
+def calculate_binding_affinity_equation(pdb_id, feature_values, actual_binding_affinity):
+    """
+    Calculate the binding affinity equation and summation for a given PDB ID or feature set.
+
+    Args:
+        pdb_id (str): The PDB ID for the sample (optional for reference).
+        feature_values (pd.Series): Feature values for the given sample.
+        actual_binding_affinity (float): The actual binding affinity value.
+
+    Returns:
+        equation (str): The equation describing the binding affinity calculation.
+        final_summation (float): The summation calculated using the equation.
+    """
+    # Step 1: Initialize raw contributions (coefficients = 1.0)
+    initial_coefficients = {feature: 1.0 for feature in feature_values.index}
+    raw_contributions = {feature: value * initial_coefficients[feature] for feature, value in feature_values.items()}
+
+    # Step 2: Adjust coefficients to match the binding affinity
+    total_raw_contributions = sum(raw_contributions.values())
+    adjustment_factor = (actual_binding_affinity - intercept) / total_raw_contributions
+    adjusted_coefficients = {
+        feature: 1.0 * adjustment_factor for feature in feature_values.index
+    }
+
+    # Step 3: Construct the equation
+    equation_terms = [
+        f"{adjusted_coefficients[feature]:.4f} * {feature}" for feature in feature_values.index
+    ]
+    equation = f"{actual_binding_affinity:.4f} = {intercept:.4f} + " + " + ".join(equation_terms)
+
+    # Step 4: Calculate the summation to verify
+    final_summation = intercept + sum(
+        feature_values[feature] * adjusted_coefficients[feature] for feature in feature_values.index
+    )
+    
+    return equation, final_summation
+
+# Generate equations for all PDB IDs in the dataset
+all_equations = []
+for _, row in training_data.iterrows():
+    pdb_id = row["PDB ID"]
+    feature_values = row[numerical_features.columns]
+    actual_binding_affinity = row["Binding Affinity (kcal/mol)"]
+    
+    equation, summation = calculate_binding_affinity_equation(pdb_id, feature_values, actual_binding_affinity)
+    all_equations.append({
+        "PDB ID": pdb_id,
+        "Binding Affinity (kcal/mol)": actual_binding_affinity,
+        "Equation": equation,
+        "Calculated Summation": summation
+    })
+
+# Save all equations to a CSV file
+equations_df = pd.DataFrame(all_equations)
+output_file = "all_pdb_equations.csv"
+equations_df.to_csv(output_file, index=False)
+
+print(f"Equations saved to '{output_file}'")
+
+# Example Usage for a Specific PDB ID
+pdb_id_example = "2be0"
+example_data = training_data[training_data["PDB ID"] == pdb_id_example]
+if not example_data.empty:
+    feature_values_example = example_data.iloc[0][numerical_features.columns]
+    actual_binding_affinity_example = example_data["Binding Affinity (kcal/mol)"].iloc[0]
+    equation, summation = calculate_binding_affinity_equation(pdb_id_example, feature_values_example, actual_binding_affinity_example)
+    print("\nExample Equation for PDB ID:", pdb_id_example)
+    print("Equation:", equation)
+    print("Calculated Summation:", summation)
+    print("Actual Binding Affinity:", actual_binding_affinity_example)
+
+
+
+# Print Metrics
+print(f"Training R^2 (RF): {train_r2:.4f}")
+print(f"Training MSE (RF): {train_mse:.4f}")
+print("Training and testing results saved to CSV files.")
