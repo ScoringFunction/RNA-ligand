@@ -1,0 +1,128 @@
+import csv
+import os
+from Bio.PDB import PDBParser
+import MDAnalysis as mda
+import numpy as np
+import subprocess
+
+# Define folder path where your PDB files are located
+folder_path = 'Complexes'
+output_csv = "rna_drug_features.csv"
+
+# Initialize parser for PDB structures
+parser = PDBParser()
+
+# List to hold each complex's features
+all_features = []
+
+# Define a function to process each PDB file and extract features
+def process_pdb_file(pdb_file, pdb_id):
+    features = {}
+    
+    # Initialize MDAnalysis for structural handling
+    universe = mda.Universe(pdb_file)
+    structure = parser.get_structure(pdb_id, pdb_file)
+
+    # Step 1: Extract RNA Sequence
+    def extract_rna_sequence():
+        rna_sequence = ""
+        valid_residues = {"A", "U", "G", "C"}
+        rna_chain_id = None
+
+        for chain in structure.get_chains():
+            for residue in chain:
+                if residue.resname.strip() in valid_residues:
+                    rna_chain_id = chain.id
+                    break
+            if rna_chain_id:
+                break
+
+        if rna_chain_id:
+            for residue in structure[0][rna_chain_id]:  # Assuming model index 0
+                if residue.resname.strip() in valid_residues:
+                    rna_sequence += residue.resname.strip()
+                else:
+                    print(f"Non-RNA residue {residue.resname} found in chain {rna_chain_id} and skipped.")
+            print(f"{pdb_id}: RNA sequence extracted successfully: {rna_sequence}")
+        else:
+            print(f"{pdb_id}: No RNA chain found.")
+            return None
+
+        features['nucleotide_composition_A'] = rna_sequence.count('A') / len(rna_sequence)
+        features['nucleotide_composition_U'] = rna_sequence.count('U') / len(rna_sequence)
+        features['nucleotide_composition_G'] = rna_sequence.count('G') / len(rna_sequence)
+        features['nucleotide_composition_C'] = rna_sequence.count('C') / len(rna_sequence)
+        features['gc_content'] = (rna_sequence.count('G') + rna_sequence.count('C')) / len(rna_sequence)
+        features['sequence'] = rna_sequence
+        return rna_sequence
+
+    rna_sequence = extract_rna_sequence()
+    if not rna_sequence:
+        return None  # Skip if no RNA sequence found
+
+    # Step 2: Save RNA sequence to file for RNAfold input
+    with open("rna_sequence.txt", "w") as file:
+        file.write(rna_sequence)
+
+    # Step 3: Run RNAfold to Calculate MFE
+    def calculate_mfe():
+        try:
+            result = subprocess.run(['RNAfold', 'rna_sequence.txt'], capture_output=True, text=True)
+            output = result.stdout
+            mfe_line = output.split('\n')[1]
+            mfe = float(mfe_line.split('(')[-1].strip(')'))
+            features['minimum_free_energy'] = mfe
+            print(f"{pdb_id}: Minimum Free Energy (MFE): {mfe}")
+        except Exception as e:
+            print(f"Error calculating MFE for {pdb_id}:", e)
+            features['minimum_free_energy'] = None
+
+    calculate_mfe()
+
+    # Step 4: Count Secondary Structures (Loop Count)
+    def count_secondary_structures():
+        loop_count = sum(1 for res in structure.get_residues() if res.resname in ['A', 'U', 'G', 'C'])
+        features['loop_count'] = loop_count
+        print(f"{pdb_id}: Loop Count:", loop_count)
+
+    count_secondary_structures()
+
+    # Step 5: Count Number of Atoms
+    def count_atoms():
+        atom_count = len(universe.select_atoms("nucleic"))  # Count of atoms in nucleic acids
+        features['atom_count'] = atom_count
+        print(f"{pdb_id}: Atom Count:", atom_count)
+
+    count_atoms()
+
+    # Add the PDB ID as a feature
+    features['pdb_id'] = pdb_id
+    return features
+
+# Loop through each PDB file in the folder and extract features
+for file_name in os.listdir(folder_path):
+    if file_name.endswith('.pdb'):
+        pdb_file_path = os.path.join(folder_path, file_name)
+        pdb_id = os.path.splitext(file_name)[0]  # Use the file name (without extension) as PDB ID
+        print(f"Processing {pdb_id}...")
+        
+        # Process the PDB file and add its features to the list
+        feature_data = process_pdb_file(pdb_file_path, pdb_id)
+        if feature_data:
+            all_features.append(feature_data)
+
+# Step 6: Save all features to a single CSV file
+# Define field names for the CSV
+fieldnames = [
+    "pdb_id","nucleotide_composition_A", "nucleotide_composition_U",
+    "nucleotide_composition_G", "nucleotide_composition_C", "gc_content",
+    "minimum_free_energy","atom_count"
+]
+
+# Write all features to the CSV file
+with open(output_csv, mode='w', newline='') as file:
+    writer = csv.DictWriter(file, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(all_features)
+
+print(f"Features saved to CSV: {output_csv}")
