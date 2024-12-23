@@ -11,7 +11,7 @@ import numpy as np
 from scipy.spatial.distance import cdist
 
 # Folder path where your PDB files are located
-folder_path = 'PDB_files'
+folder_path = 'Complexes'
 
 # Define common ions and molecules to ignore for ligand identification
 common_ions = {'NA', 'K', 'MG', 'ZN', 'CA', 'CL', 'MN', 'FE', 'CU', 'CO', 'BR', 'IOD', 'NI', 'HG', 'AG', 'CD', 'AU', 'PB', 'RB', 'HOH'}
