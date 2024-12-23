@@ -2,102 +2,118 @@ import pandas as pd
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
 
-# Load the dataset
-file_path = "Predicted_BA.csv"  # Path to your uploaded CSV file
-training_data = pd.read_csv(file_path)
+# Function to ask the user for the CSV file path
+def get_csv_file_path():
+    file_path = input("Please enter the path to your CSV file (e.g., 'training_data.csv'): ").strip()
+    return file_path
 
-# Clean column names by stripping any leading or trailing spaces
-training_data.columns = training_data.columns.str.strip()
+# Load the training dataset
+training_file_path = get_csv_file_path()  # Prompt for the file path
+training_data = pd.read_csv(training_file_path)
 
-# Check the actual column names to ensure everything is correct
-print("Column Names:", training_data.columns)
+# Extract numerical features and target (binding affinity)
+# Ensure we drop the columns 'predicted_affinity' and 'pdb_id' safely
+columns_to_drop = ['predicted_affinity', 'pdb_id']
+numerical_features = training_data.select_dtypes(include="number")
 
-# Ensure that 'pdb_id' and 'Predicted Binding Affinity' are properly handled
-if 'pdb_id' not in training_data.columns:
-    print("Error: 'pdb_id' column is missing.")
-else:
-    print("'pdb_id' column found.")
+# Drop columns if they exist
+numerical_features = numerical_features.drop(columns=[col for col in columns_to_drop if col in numerical_features.columns])
 
-if 'Predicted Binding Affinity' not in training_data.columns:
-    print("Error: 'Predicted Binding Affinity' column is missing.")
-else:
-    print("'Predicted Binding Affinity' column found.")
-
-# Extract numerical features and target (Predicted Binding Affinity)
-# Handle the case where 'pdb_id' column might be causing issues
-try:
-    numerical_features = training_data.select_dtypes(include="number").drop(columns=["Predicted Binding Affinity", "pdb_id"])
-except KeyError as e:
-    print(f"Error: {e}")
-    print("Ensure that 'pdb_id' and 'Predicted Binding Affinity' are present in the dataset.")
-    raise
-
-target = training_data["Predicted Binding Affinity"]
+# Target is predicted affinity
+target = training_data["predicted_affinity"]
 
 # Train a Random Forest Regressor
 rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
 rf_model.fit(numerical_features, target)
 
-# Calculate the intercept (mean Predicted Binding Affinity)
+# Calculate the intercept (mean predicted affinity)
 intercept = target.mean()
 
-# Manually adjust the intercept (set it between -2 and -3)
-manual_intercept = -2.85  # Adjust as needed between -2 and -3
-
-# Function to calculate the binding affinity equation
-def calculate_binding_affinity_equation(pdb_id, feature_values, actual_binding_affinity, intercept):
+# Function to calculate the binding affinity equation and the summation
+def calculate_binding_affinity_equation(pdb_id, feature_values, actual_binding_affinity):
     """
     Calculate the binding affinity equation and summation for a given PDB ID or feature set.
-    
+
     Args:
         pdb_id (str): The PDB ID for the sample (optional for reference).
         feature_values (pd.Series): Feature values for the given sample.
         actual_binding_affinity (float): The actual binding affinity value.
-        intercept (float): The manually adjusted intercept value.
-    
+
     Returns:
         equation (str): The equation describing the binding affinity calculation.
         final_summation (float): The summation calculated using the equation.
     """
-    # Step 1: Initialize raw contributions (coefficients = 1.0)
-    initial_coefficients = {feature: 1.0 for feature in feature_values.index}
-    raw_contributions = {feature: value * initial_coefficients[feature] for feature, value in feature_values.items()}
+    # Predict the binding affinity using the Random Forest model
+    predicted_affinity = rf_model.predict([feature_values])[0]  # Predict for the given feature set
 
-    # Step 2: Adjust coefficients to match the binding affinity
-    total_raw_contributions = sum(raw_contributions.values())
-    adjustment_factor = (actual_binding_affinity - intercept) / total_raw_contributions
-    adjusted_coefficients = {
-        feature: 1.0 * adjustment_factor for feature in feature_values.index
-    }
+    # Construct the equation using the predicted affinity
+    equation_terms = [f"{predicted_affinity:.4f} = {intercept:.4f} + " + " + ".join([f"{feature_values[feature]:.4f} * {feature}" for feature in feature_values.index])]
+    equation = f"{predicted_affinity:.4f} = {intercept:.4f} + " + " + ".join([f"{feature_values[feature]:.4f} * {feature}" for feature in feature_values.index])
 
-    # Step 3: Construct the equation
-    equation_terms = [
-        f"{adjusted_coefficients[feature]:.4f} * {feature}" for feature in feature_values.index
-    ]
-    equation = f"{actual_binding_affinity:.4f} = {intercept:.4f} + " + " + ".join(equation_terms)
+    # Calculate the summation using the model's predicted contributions
+    final_summation = intercept + sum(feature_values[feature] * rf_model.feature_importances_[i] for i, feature in enumerate(feature_values.index))
 
-    # Step 4: Calculate the summation to verify
-    final_summation = intercept + sum(
-        feature_values[feature] * adjusted_coefficients[feature] for feature in feature_values.index
-    )
-    
     return equation, final_summation
 
-# Filter for a specific PDB ID (pose1 in this case)
-pdb_id_example = "pose1"  # Update this to the specific PDB ID you want
-example_data = training_data[training_data["pdb_id"] == pdb_id_example]
+# Function to process the CSV and generate contributing equations
+def generate_contributing_equations():
+    # Generate equations for all PDB IDs in the dataset
+    all_equations = []
+    for _, row in training_data.iterrows():
+        pdb_id = row["pdb_id"]
+        feature_values = row[numerical_features.columns]
+        actual_binding_affinity = row["predicted_affinity"]
+        
+        equation, summation = calculate_binding_affinity_equation(pdb_id, feature_values, actual_binding_affinity)
+        all_equations.append({
+            "PDB ID": pdb_id,
+            "Predicted Binding Affinity": actual_binding_affinity,
+            "Equation": equation,
+            "Calculated Summation": summation
+        })
 
-# Check if the PDB ID exists in the dataset
-if not example_data.empty:
-    feature_values_example = example_data.iloc[0][numerical_features.columns]
-    actual_binding_affinity_example = example_data["Predicted Binding Affinity"].iloc[0]
+    # Save all equations to a CSV file
+    equations_df = pd.DataFrame(all_equations)
+    output_file = "all_pdb_equations.csv"
+    equations_df.to_csv(output_file, index=False)
+
+    print(f"Equations saved to '{output_file}'")
+
+# Ask the user if they want to process the CSV file and generate the contributing equations
+def main():
+    print("Welcome to the Binding Affinity Contribution Equation Generator!")
     
-    # Calculate the equation for the specified PDB ID
-    equation, summation = calculate_binding_affinity_equation(pdb_id_example, feature_values_example, actual_binding_affinity_example, manual_intercept)
+    # Get the file path from user input
+    training_file_path = get_csv_file_path()
     
-    print("\nExample Equation for PDB ID:", pdb_id_example)
-    print("Equation:", equation)
-    print("Calculated Summation:", summation)
-    print("Actual Binding Affinity:", actual_binding_affinity_example)
-else:
-    print(f"No data found for PDB ID: {pdb_id_example}")
+    try:
+        # Load the training dataset
+        training_data = pd.read_csv(training_file_path)
+        
+        # Proceed to calculate contributing equations
+        generate_contributing_equations()
+
+        # Example Usage for a Specific PDB ID (prompt user for specific PDB)
+        pdb_id_example = input("Enter a PDB ID to see its contributing equation (or leave blank for all): ").strip()
+        if pdb_id_example:
+            example_data = training_data[training_data["pdb_id"] == pdb_id_example]
+            if not example_data.empty:
+                feature_values_example = example_data.iloc[0][numerical_features.columns]
+                actual_binding_affinity_example = example_data["predicted_affinity"].iloc[0]
+                equation, summation = calculate_binding_affinity_equation(pdb_id_example, feature_values_example, actual_binding_affinity_example)
+                print("\nExample Equation for PDB ID:", pdb_id_example)
+                print("Equation:", equation)
+                print("Calculated Summation:", summation)
+                print("Actual Binding Affinity:", actual_binding_affinity_example)
+            else:
+                print(f"PDB ID {pdb_id_example} not found in the dataset.")
+        else:
+            print("No specific PDB ID selected. Equations for all PDBs have been saved.")
+    
+    except FileNotFoundError:
+        print(f"The file at {training_file_path} was not found. Please check the file path and try again.")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+# Run the main function
+main()
