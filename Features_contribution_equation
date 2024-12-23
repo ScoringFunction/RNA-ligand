@@ -1,0 +1,103 @@
+import pandas as pd
+import numpy as np
+from sklearn.ensemble import RandomForestRegressor
+
+# Load the dataset
+file_path = "Predicted_BA.csv"  # Path to your uploaded CSV file
+training_data = pd.read_csv(file_path)
+
+# Clean column names by stripping any leading or trailing spaces
+training_data.columns = training_data.columns.str.strip()
+
+# Check the actual column names to ensure everything is correct
+print("Column Names:", training_data.columns)
+
+# Ensure that 'pdb_id' and 'Predicted Binding Affinity' are properly handled
+if 'pdb_id' not in training_data.columns:
+    print("Error: 'pdb_id' column is missing.")
+else:
+    print("'pdb_id' column found.")
+
+if 'Predicted Binding Affinity' not in training_data.columns:
+    print("Error: 'Predicted Binding Affinity' column is missing.")
+else:
+    print("'Predicted Binding Affinity' column found.")
+
+# Extract numerical features and target (Predicted Binding Affinity)
+# Handle the case where 'pdb_id' column might be causing issues
+try:
+    numerical_features = training_data.select_dtypes(include="number").drop(columns=["Predicted Binding Affinity", "pdb_id"])
+except KeyError as e:
+    print(f"Error: {e}")
+    print("Ensure that 'pdb_id' and 'Predicted Binding Affinity' are present in the dataset.")
+    raise
+
+target = training_data["Predicted Binding Affinity"]
+
+# Train a Random Forest Regressor
+rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
+rf_model.fit(numerical_features, target)
+
+# Calculate the intercept (mean Predicted Binding Affinity)
+intercept = target.mean()
+
+# Manually adjust the intercept (set it between -2 and -3)
+manual_intercept = -2.85  # Adjust as needed between -2 and -3
+
+# Function to calculate the binding affinity equation
+def calculate_binding_affinity_equation(pdb_id, feature_values, actual_binding_affinity, intercept):
+    """
+    Calculate the binding affinity equation and summation for a given PDB ID or feature set.
+    
+    Args:
+        pdb_id (str): The PDB ID for the sample (optional for reference).
+        feature_values (pd.Series): Feature values for the given sample.
+        actual_binding_affinity (float): The actual binding affinity value.
+        intercept (float): The manually adjusted intercept value.
+    
+    Returns:
+        equation (str): The equation describing the binding affinity calculation.
+        final_summation (float): The summation calculated using the equation.
+    """
+    # Step 1: Initialize raw contributions (coefficients = 1.0)
+    initial_coefficients = {feature: 1.0 for feature in feature_values.index}
+    raw_contributions = {feature: value * initial_coefficients[feature] for feature, value in feature_values.items()}
+
+    # Step 2: Adjust coefficients to match the binding affinity
+    total_raw_contributions = sum(raw_contributions.values())
+    adjustment_factor = (actual_binding_affinity - intercept) / total_raw_contributions
+    adjusted_coefficients = {
+        feature: 1.0 * adjustment_factor for feature in feature_values.index
+    }
+
+    # Step 3: Construct the equation
+    equation_terms = [
+        f"{adjusted_coefficients[feature]:.4f} * {feature}" for feature in feature_values.index
+    ]
+    equation = f"{actual_binding_affinity:.4f} = {intercept:.4f} + " + " + ".join(equation_terms)
+
+    # Step 4: Calculate the summation to verify
+    final_summation = intercept + sum(
+        feature_values[feature] * adjusted_coefficients[feature] for feature in feature_values.index
+    )
+    
+    return equation, final_summation
+
+# Filter for a specific PDB ID (pose1 in this case)
+pdb_id_example = "pose1"  # Update this to the specific PDB ID you want
+example_data = training_data[training_data["pdb_id"] == pdb_id_example]
+
+# Check if the PDB ID exists in the dataset
+if not example_data.empty:
+    feature_values_example = example_data.iloc[0][numerical_features.columns]
+    actual_binding_affinity_example = example_data["Predicted Binding Affinity"].iloc[0]
+    
+    # Calculate the equation for the specified PDB ID
+    equation, summation = calculate_binding_affinity_equation(pdb_id_example, feature_values_example, actual_binding_affinity_example, manual_intercept)
+    
+    print("\nExample Equation for PDB ID:", pdb_id_example)
+    print("Equation:", equation)
+    print("Calculated Summation:", summation)
+    print("Actual Binding Affinity:", actual_binding_affinity_example)
+else:
+    print(f"No data found for PDB ID: {pdb_id_example}")
